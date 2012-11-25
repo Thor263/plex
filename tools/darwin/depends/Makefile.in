@@ -11,7 +11,7 @@ SUBDIRS := \
 	libass libcdio libsamplerate librtmp libcrystalhd libnfs \
 	libGLEW libsdl libsdl_mixer libsdl_image \
 	libmicrohttpd libmodplug libbluray libyajl \
-	samba python26 boost libwavpack \
+	samba python26 mysqlclient boost libwavpack \
 
 ifeq ($(DARWIN), ios)
   EXCLUDED = libcrystalhd libGLEW libsdl libsdl_mixer libsdl_image

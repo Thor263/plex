@@ -128,7 +128,7 @@ bool CLocalizeStrings::Load(const CStdString& strFileName, const CStdString& str
     LoadXML(strFallbackFileName, encoding);
 
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Winvalid-source-encoding"
+// #pragma GCC diagnostic ignored "-Winvalid-source-encoding"
   
   // fill in the constant strings
   m_strings[20022] = "";

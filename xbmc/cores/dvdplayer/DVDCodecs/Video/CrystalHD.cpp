@@ -219,6 +219,7 @@ protected:
   void                CopyOutAsNV12DeInterlace(CPictureBuffer *pBuffer, BCM::BC_DTS_PROC_OUT *procOut, int w, int h, int stride);
   void                CopyOutAsYV12(CPictureBuffer *pBuffer, BCM::BC_DTS_PROC_OUT *procOut, int w, int h, int stride);
   void                CopyOutAsYV12DeInterlace(CPictureBuffer *pBuffer, BCM::BC_DTS_PROC_OUT *procOut, int w, int h, int stride);
+  void                CheckUpperLeftGreenPixelHack(CPictureBuffer *pBuffer);
   bool                GetDecoderOutput(void);
   virtual void        Process(void);
 
@@ -230,6 +231,7 @@ protected:
   bool                m_has_bcm70015;
   unsigned int        m_timeout;
   bool                m_format_valid;
+  bool                m_is_live_stream;
   int                 m_width;
   int                 m_height;
   uint64_t            m_timestamp;
@@ -265,6 +267,7 @@ CPictureBuffer::CPictureBuffer(DVDVideoPicture::EFormat format, int width, int h
   m_color_range = 0;
   m_color_matrix = 4;
   m_format = format;
+  m_framerate = 0;
   
   switch(m_format)
   {
@@ -327,10 +330,21 @@ CMPCOutputThread::CMPCOutputThread(void *device, DllLibCrystalHD *dll, bool has_
   m_has_bcm70015(has_bcm70015),
   m_timeout(20),
   m_format_valid(false),
+  m_is_live_stream(false),
+  m_width(0),
+  m_height(0),
+  m_timestamp(0),
+  m_PictureNumber(0),
+  m_color_space(0),
+  m_color_range(0),
+  m_color_matrix(0),
+  m_interlace(0),
   m_framerate_tracking(false),
   m_framerate_cnt(0),
   m_framerate_timestamp(0.0),
-  m_framerate(0.0)
+  m_framerate(0.0),
+  m_aspectratio_x(1),
+  m_aspectratio_y(1)
 {
   m_sw_scale_ctx = NULL;
   m_dllSwScale = new DllSwScale;
@@ -380,11 +394,26 @@ void CMPCOutputThread::DoFrameRateTracking(double timestamp)
   if (timestamp != DVD_NOPTS_VALUE)
   {
     double duration;
+    // if timestamp does not start at a low value we
+    // came in the middle of an online live stream
+    // 250 ms is a fourth of a 25fps source
+    // if timestamp is larger than that at the beginning
+    // we are much more out of sync than with the rough
+    // calculation. To cover these 250 ms we need
+    // roughly 5 seconds of video stream to get back
+    // in sync
+    if (m_framerate_cnt == 0 && timestamp > 250000.0)
+      m_is_live_stream = true;
+      
     duration = timestamp - m_framerate_timestamp;
     if (duration > 0.0)
     {
       double framerate;
-
+      // cnt count has to be done here, cause we miss frames
+      // if framerate will not calculated correctly and
+      // duration has to be > 0.0 so we do not calc images twice
+      m_framerate_cnt++;
+        
       m_framerate_timestamp += duration;
       framerate = DVD_TIME_BASE / duration;
       // qualify framerate, we don't care about absolute value, just
@@ -402,8 +431,9 @@ void CMPCOutputThread::DoFrameRateTracking(double timestamp)
         case 30:
         case 25:
         case 24:
-          m_framerate_cnt++;
-          m_framerate = DVD_TIME_BASE / (m_framerate_timestamp/m_framerate_cnt);
+          // if we have such a live stream framerate is more exact than calculating
+          // cause of m_framerate_cnt and timestamp do not match in any way
+          m_framerate = m_is_live_stream ? framerate : DVD_TIME_BASE / (m_framerate_timestamp/m_framerate_cnt);
         break;
       }
     }
@@ -735,6 +765,47 @@ void CMPCOutputThread::CopyOutAsNV12DeInterlace(CPictureBuffer *pBuffer, BCM::BC
   pBuffer->m_interlace = false;
 }
 
+void CMPCOutputThread::CheckUpperLeftGreenPixelHack(CPictureBuffer *pBuffer)
+{
+  // crystalhd driver sends internal info in 1st pixel location, then restores
+  // original pixel value but sometimes, the info is broked and the
+  // driver cannot do the restore and zeros the pixel. This is wrong for
+  // yuv color space, uv values should be set to 128 otherwise we get a
+  // bright green pixel in upper left.
+  // We fix this by replicating the 2nd pixel to the 1st.
+  switch(pBuffer->m_format)
+  {
+    default:
+    case DVDVideoPicture::FMT_YUV420P:
+    {
+      uint8_t *d_y = pBuffer->m_y_buffer_ptr;
+      uint8_t *d_u = pBuffer->m_u_buffer_ptr;
+      uint8_t *d_v = pBuffer->m_v_buffer_ptr;
+      d_y[0] = d_y[1];
+      d_u[0] = d_u[1];
+      d_v[0] = d_v[1];
+    }
+    break;
+            
+    case DVDVideoPicture::FMT_NV12:
+    {
+      uint8_t  *d_y  = pBuffer->m_y_buffer_ptr;
+      uint16_t *d_uv = (uint16_t*)pBuffer->m_uv_buffer_ptr;
+      d_y[0] = d_y[1];
+      d_uv[0] = d_uv[1];
+    }
+    break;
+            
+    case DVDVideoPicture::FMT_YUY2:
+    {
+      uint32_t *d_yuyv = (uint32_t*)pBuffer->m_y_buffer_ptr;
+      d_yuyv[0] = d_yuyv[1];
+    }
+    break;
+  }
+}
+
+
 bool CMPCOutputThread::GetDecoderOutput(void)
 {
   BCM::BC_STATUS ret;
@@ -1012,9 +1083,24 @@ CCrystalHD::CCrystalHD() :
   m_has_bcm70015(false),
   m_color_space(BCM::MODE420),
   m_drop_state(false),
-  m_pOutputThread(NULL)
+  m_skip_state(false),
+  m_timeout(0),
+  m_wait_timeout(0),
+  m_field(0),
+  m_width(0),
+  m_height(0),
+  m_reset(0),
+  m_last_pict_num(0),
+  m_last_demuxer_pts(0.0),
+  m_last_decoder_pts(0.0),
+  m_pOutputThread(NULL),
+  m_sps_pps_size(0),
+  m_convert_bitstream(false)
 {
-
+    
+  memset(&m_chd_params, 0, sizeof(m_chd_params));
+  memset(&m_sps_pps_context, 0, sizeof(m_sps_pps_context));
+    
   m_dll = new DllLibCrystalHD;
 #ifdef _WIN32
   CStdString  strDll;
@@ -1488,9 +1574,8 @@ bool CCrystalHD::AddInput(unsigned char *pData, size_t size, double dts, double 
       }
     }
 
-    bool wait_state;
     if (m_pOutputThread->GetReadyCount() < 1)
-      wait_state = m_pOutputThread->WaitOutput(m_wait_timeout);
+      m_pOutputThread->WaitOutput(m_wait_timeout);
   }
 
   return true;
@@ -1663,10 +1748,10 @@ bool CCrystalHD::extract_sps_pps_from_avcc(int extradata_size, void *extradata)
     if (data_size < nal_size)
 			return false;
 
-    m_chd_params.sps_pps_buf[0] = 0;
-    m_chd_params.sps_pps_buf[1] = 0;
-    m_chd_params.sps_pps_buf[2] = 0;
-    m_chd_params.sps_pps_buf[3] = 1;
+    m_chd_params.sps_pps_buf[m_chd_params.sps_pps_size + 0] = 0;
+    m_chd_params.sps_pps_buf[m_chd_params.sps_pps_size + 1] = 0;
+    m_chd_params.sps_pps_buf[m_chd_params.sps_pps_size + 2] = 0;
+    m_chd_params.sps_pps_buf[m_chd_params.sps_pps_size + 3] = 1;
 
     m_chd_params.sps_pps_size += 4;
 

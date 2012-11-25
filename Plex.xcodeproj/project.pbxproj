@@ -6110,7 +6110,6 @@
 				748667A512FC04D800D8F899 /* Copy Root Files */,
 				748667B212FC05DE00D8F899 /* Copy Libraries */,
 				E31A8DE51356DFAF00EEB013 /* Update Build Number */,
-				E3AC08B2154691EB0035E687 /* Code Sign */,
 			);
 			buildRules = (
 			);
@@ -6219,21 +6218,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "/usr/bin/python ./build-number.py";
-		};
-		E3AC08B2154691EB0035E687 /* Code Sign */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-			);
-			name = "Code Sign";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "/usr/bin/codesign --force --sign \"Developer ID Application: Plex Inc.\" -r requirement.bin \"$BUILT_PRODUCTS_DIR/Plex.app\"\n";
-			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -7231,6 +7215,7 @@
 					"$(LIBRARY_SEARCH_PATHS_QUOTED_FOR_TARGET_27)",
 					"$(LIBRARY_SEARCH_PATHS_QUOTED_FOR_TARGET_28)",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 10.6;
 				OTHER_LDFLAGS = (
 					"-headerpad_max_install_names",
 					"-all_load",
@@ -7339,6 +7324,7 @@
 					"$(LIBRARY_SEARCH_PATHS_QUOTED_FOR_TARGET_27)",
 					"$(LIBRARY_SEARCH_PATHS_QUOTED_FOR_TARGET_28)",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 10.6;
 				OTHER_LDFLAGS = (
 					"-headerpad_max_install_names",
 					"-all_load",
